@@ -5,6 +5,8 @@
 mod mock_reentrant_token;
 mod types;
 
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
+use types::{BoostConfig, DataKey, PoolError, Position, UserStake};
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env};
 pub use types::PoolError;
 use types::{BoostConfig, DataKey, Position, UserStake};
@@ -261,6 +263,7 @@ impl FarmingPool {
         global_multiplier: u32,
         credit_rate: i128,
         min_lock_period: u32,
+        min_stake_amount: i128,
     ) -> Result<(), PoolError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(PoolError::AlreadyInitialized);
@@ -288,6 +291,7 @@ impl FarmingPool {
             .set(&DataKey::MinLockPeriod, &min_lock_period);
         env.storage()
             .instance()
+            .set(&DataKey::MinStakeAmount, &min_stake_amount);
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
         bump_instance(&env);
         Ok(())
@@ -295,9 +299,15 @@ impl FarmingPool {
 
     pub fn admin(env: Env) -> Result<Address, PoolError> {
         bump_instance(&env);
-        get_admin(&env)
+        get_admin(&env).unwrap()
     }
 
+    /// Admin: transfer admin rights to `new_admin`. Current admin must authorise.
+    ///
+    /// Supports key rotation and governance handoffs without redeploying the pool.
+    /// Emits a `("pool", "adm_xfr")` event with `(old_admin, new_admin)`.
+    pub fn transfer_admin(env: Env, new_admin: Address) {
+        let current = get_admin(&env).unwrap();
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
         let current = get_admin(&env)?;
         current.require_auth();
@@ -348,6 +358,11 @@ impl FarmingPool {
         require_not_paused(&env)?;
 
         assert!(amount > 0, "amount must be positive");
+        let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
+        if amount < min_stake {
+            return Err(PoolError::BelowMinimumStake);
+        }
+
         bump_instance(&env);
 
         let current = env.ledger().sequence();
@@ -366,6 +381,7 @@ impl FarmingPool {
             }
         };
 
+        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         position.credit_rate = read_credit_rate(&env);
 
         // Checks-effects-interactions: persist state *before* the external
@@ -414,6 +430,7 @@ impl FarmingPool {
         let total_credits = position.total_credits;
         position.amount -= amount;
 
+        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &env.current_contract_address(),
@@ -444,6 +461,9 @@ impl FarmingPool {
         let elapsed = env
             .ledger()
             .sequence()
+            .saturating_sub(pos.checkpoint_ledger);
+        pos.total_credits + pos.amount * rate * elapsed as i128;
+        Ok(pos.total_credits + pos.amount * rate * elapsed as i128)
             .saturating_sub(position.checkpoint_ledger);
         Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
     }
@@ -481,6 +501,7 @@ impl FarmingPool {
     }
 
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
+        get_admin(&env).unwrap().require_auth();
         require_initialized(&env)?;
         let admin = get_admin(&env)?;
         admin.require_auth();
@@ -489,6 +510,9 @@ impl FarmingPool {
         }
         bump_instance(&env);
 
+        let mut total_returned: i128 = 0;
+        let mut banked_credits: i128 = 0;
+        let token = token::TokenClient::new(&env, &get_stake_token(&env).unwrap());
         let mut total_returned = 0i128;
         let mut banked_credits = 0i128;
         let stake_token = get_stake_token(&env)?;
@@ -539,6 +563,11 @@ impl FarmingPool {
 
         require_initialized(&env)?;
         assert!(amount > 0, "amount must be positive");
+        let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
+        if amount < min_stake {
+            return Err(PoolError::BelowMinimumStake);
+        }
+
         bump_instance(&env);
 
         let current = env.ledger().sequence();
@@ -555,6 +584,8 @@ impl FarmingPool {
             }
         };
 
+        // Pull tokens from caller into the contract.
+        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         new_stake.credit_rate = read_credit_rate(&env);
 
         let stake_token = get_stake_token(&env)?;
@@ -579,6 +610,8 @@ impl FarmingPool {
         checkpoint(&env, &from, &mut stake);
         let total_credits = stake.credits_banked;
 
+        // Return staked tokens to caller.
+        // token::TokenClient::new(&env, &get_stake_token(&env)).transfer(
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &env.current_contract_address(),
@@ -716,6 +749,8 @@ impl FarmingPool {
         let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
         let multiplier = read_global_multiplier(&env);
         let elapsed = env.ledger().sequence().saturating_sub(stake.start_ledger);
+        stake.credits_banked
+            + compute_credits(stake.amount, allocation_pct, multiplier, rate, elapsed);
         Ok(stake.credits_banked
             + compute_credits(
                 stake.amount,
@@ -726,6 +761,29 @@ impl FarmingPool {
             ))
     }
 
+    pub fn set_min_stake_amount(env: Env, amount: i128) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        bump_instance(&env);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MinStakeAmount, &amount);
+
+        Ok(())
+    }
+    /// Return the current min stake amount , or `None` if not staked.
+    pub fn get_min_stake_amount(env: Env) -> Result<i128, PoolError>  {
+        require_initialized(&env)?;
+        let min_stake = env.storage().instance()
+            .get::<DataKey, i128>(&DataKey::MinStakeAmount)
+            .unwrap_or(1);
+
+        Ok(min_stake)
+    }
+
+
+    /// Return the current stake record for `user`, or `None` if not staked.
     pub fn get_stake(env: Env, user: Address) -> Result<Option<UserStake>, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
