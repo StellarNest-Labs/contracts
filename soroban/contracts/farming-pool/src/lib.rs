@@ -5,6 +5,7 @@
 mod mock_reentrant_token;
 mod types;
 
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Vec};
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 use types::{BoostConfig, DataKey, PoolError, Position, UserStake};
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env};
@@ -206,6 +207,33 @@ fn remove_position(env: &Env, user: &Address) {
         .remove(&DataKey::UserPosition(user.clone()));
 }
 
+fn whitelist_enabled(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::WhitelistEnabled)
+        .unwrap_or(false)
+}
+
+fn is_user_whitelisted(env: &Env, user: &Address) -> bool {
+    let key = DataKey::Whitelisted(user.clone());
+    let ok = env.storage().persistent().get(&key).unwrap_or(false);
+    if ok {
+        bump_user(env, &key);
+    }
+    ok
+}
+
+// ── Boost calculation ─────────────────────────────────────────────────────────
+
+/// Compute the effective total stake for credit accrual.
+///
+/// Splits `amount` into a principal portion and a boosted virtual portion:
+///   boosted_amount  = amount * allocation_pct / 100
+///   principal_stake = amount - boosted_amount
+///   virtual_stake   = boosted_amount * multiplier
+///   total_stake     = principal_stake + virtual_stake
+///
+/// With no boost (allocation_pct = 0) total_stake == amount.
 fn compute_total_stake(amount: i128, allocation_pct: u32, multiplier: u32) -> i128 {
     let boosted = amount * allocation_pct as i128 / 100;
     let principal = amount - boosted;
@@ -358,6 +386,9 @@ impl FarmingPool {
         require_not_paused(&env)?;
 
         assert!(amount > 0, "amount must be positive");
+
+        if whitelist_enabled(&env) && !is_user_whitelisted(&env, &user) {
+            return Err(PoolError::NotWhitelisted);
         let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
         if amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
@@ -557,12 +588,82 @@ impl FarmingPool {
         value.unwrap_or(0)
     }
 
+    // ── Whitelist system ──────────────────────────────────────────────────────
+
+    /// Admin: enable whitelist mode. Admin must authorise.
+    pub fn enable_whitelist(env: Env) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        bump_instance(&env);
+        env.storage().instance().set(&DataKey::WhitelistEnabled, &true);
+        Ok(())
+    }
+
+    /// Admin: disable whitelist mode. Admin must authorise.
+    pub fn disable_whitelist(env: Env) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        bump_instance(&env);
+        env.storage().instance().set(&DataKey::WhitelistEnabled, &false);
+        Ok(())
+    }
+
+    /// Admin: add `user` to the whitelist. Admin must authorise.
+    pub fn add_to_whitelist(env: Env, user: Address) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        bump_instance(&env);
+
+        let key = DataKey::Whitelisted(user.clone());
+        env.storage().persistent().set(&key, &true);
+        bump_user(&env, &key);
+        Ok(())
+    }
+
+    /// Admin: remove `user` from the whitelist. Admin must authorise.
+    pub fn remove_from_whitelist(env: Env, user: Address) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        bump_instance(&env);
+
+        let key = DataKey::Whitelisted(user.clone());
+        env.storage().persistent().remove(&key);
+        Ok(())
+    }
+
+    /// Public: check if `user` is whitelisted. Bumps TTL of the entry if whitelisted.
+    pub fn is_whitelisted(env: Env, user: Address) -> bool {
+        bump_instance(&env);
+        is_user_whitelisted(&env, &user)
+    }
+
+    /// Admin: batch add multiple `users` to the whitelist. Capped at 50 addresses per call. Admin must authorise.
+    pub fn batch_add_to_whitelist(env: Env, users: Vec<Address>) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        get_admin(&env)?.require_auth();
+        assert!(users.len() <= 50, "max 50 addresses per call");
+        bump_instance(&env);
+
+        for user in users.iter() {
+            let key = DataKey::Whitelisted(user.clone());
+            env.storage().persistent().set(&key, &true);
+            bump_user(&env, &key);
+        }
+        Ok(())
+    }
+
+    // ── Boost / Stake system ─────────────────────────────────────────────────
+
+    /// Stake `amount` tokens. If a prior stake exists, earned credits are checkpointed first.
     pub fn stake(env: Env, from: Address, amount: i128) -> Result<(), PoolError> {
         from.require_auth();
         require_not_paused(&env)?;
 
         require_initialized(&env)?;
         assert!(amount > 0, "amount must be positive");
+
+        if whitelist_enabled(&env) && !is_user_whitelisted(&env, &from) {
+            return Err(PoolError::NotWhitelisted);
         let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
         if amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
