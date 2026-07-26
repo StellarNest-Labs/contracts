@@ -1,8 +1,9 @@
 #![no_std]
+#![allow(deprecated)]
 
-mod types;
 #[cfg(test)]
 mod mock_reentrant_token;
+mod types;
 
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env};
 pub use types::PoolError;
@@ -96,7 +97,6 @@ fn require_not_paused(env: &Env) -> Result<(), PoolError> {
     }
     Ok(())
 }
-
 
 fn get_admin(env: &Env) -> Result<Address, PoolError> {
     env.storage()
@@ -382,7 +382,7 @@ impl FarmingPool {
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &user,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
@@ -560,7 +560,7 @@ impl FarmingPool {
         let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &from,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
@@ -594,10 +594,9 @@ impl FarmingPool {
         user.require_auth();
         require_not_paused(&env)?;
 
-
         require_initialized(&env)?;
         assert!(
-            allocation_pct >= 1 && allocation_pct <= 100,
+            (1..=100).contains(&allocation_pct),
             "allocation_pct must be 1-100"
         );
         bump_instance(&env);

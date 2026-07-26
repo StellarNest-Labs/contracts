@@ -32,6 +32,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Build WASM fixtures for factory integration tests
+        working-directory: soroban
+        run: cargo build --workspace --target wasm32v1-none --release
+
+      - name: Check formatting
+        working-directory: soroban
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: soroban
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Pre-build farming-pool WASM for integration tests
         working-directory: soroban
         # `factory/src/test.rs` embeds the real farming-pool WASM via
