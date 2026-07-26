@@ -16,6 +16,7 @@ pub enum PoolError {
     NotPaused = 13,
     Paused = 20,
     NoActiveStake = 14,
+    NotWhitelisted = 15,
     /// `global_multiplier` was 0 or exceeded `MAX_GLOBAL_MULTIPLIER`. See #89.
     InvalidGlobalMultiplier = 15,
 
@@ -68,5 +69,8 @@ pub enum DataKey {
     UserStake(Address),
     UserPosition(Address),
     BankedCredits(Address),
+    // Whitelist keys
+    WhitelistEnabled,
+    Whitelisted(Address),
     MinStakeAmount,
 }
