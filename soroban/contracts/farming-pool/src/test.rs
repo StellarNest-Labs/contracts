@@ -1175,7 +1175,6 @@ fn test_pause_blocks_lock_assets() {
     }
 }
 
-
 #[test]
 fn test_pause_blocks_unlock_assets() {
     let t = setup(1, 1);
@@ -1187,7 +1186,6 @@ fn test_pause_blocks_unlock_assets() {
         other => panic!("expected PoolError::Paused, got: {:?}", other),
     }
 }
-
 
 #[test]
 fn test_unpause_restores_operations() {
@@ -1231,7 +1229,6 @@ fn test_pause_blocks_stake() {
         other => panic!("expected PoolError::Paused, got: {:?}", other),
     }
 }
-
 
 #[test]
 fn test_unpause_restores_stake() {

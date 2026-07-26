@@ -241,9 +241,18 @@ impl Factory {
     /// maintained incrementally in create_pool) would avoid full-registry scans entirely.
     /// This would be a more robust long-term fix but requires changes to create_pool's
     /// write path and potentially a migration/backfill for existing pools.
-    pub fn get_pools_by_asset(env: Env, asset: Address, start_id: u32, limit: u32) -> ListPoolsResponse {
+    pub fn get_pools_by_asset(
+        env: Env,
+        asset: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> ListPoolsResponse {
         bump_instance(&env);
-        let count: u32 = env.storage().instance().get(&DataKey::PoolCount).unwrap_or(0);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCount)
+            .unwrap_or(0);
         let capped_limit = limit.min(20);
         let mut records: Vec<(u32, PoolRecord)> = vec![&env];
         let mut next_start_id = count;
@@ -298,7 +307,11 @@ impl Factory {
     /// ~60 days) to ensure all pool records remain accessible.
     pub fn refresh_pool_ttls(env: Env, start_id: u32, limit: u32) -> Result<(), FactoryError> {
         bump_instance(&env);
-        let count: u32 = env.storage().instance().get(&DataKey::PoolCount).unwrap_or(0);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolCount)
+            .unwrap_or(0);
         let capped_limit = limit.min(20);
         let end = start_id.saturating_add(capped_limit).min(count);
         for pool_id in start_id..end {
@@ -371,19 +384,14 @@ impl Factory {
     ///
     /// Emits a `wasm_set` event with `(old_hash, new_hash)` so that the previous
     /// hash is discoverable off-chain for rollback scenarios.
-    pub fn set_pool_wasm_hash(
-        env: Env,
-        new_hash: BytesN<32>,
-    ) -> Result<(), FactoryError> {
+    pub fn set_pool_wasm_hash(env: Env, new_hash: BytesN<32>) -> Result<(), FactoryError> {
         require_initialized(&env)?;
         let admin: Address = load_admin(&env);
         admin.require_auth();
         bump_instance(&env);
 
         let old_hash: BytesN<32> = env.storage().instance().get(&DataKey::WasmHash).unwrap();
-        env.storage()
-            .instance()
-            .set(&DataKey::WasmHash, &new_hash);
+        env.storage().instance().set(&DataKey::WasmHash, &new_hash);
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("wasm_set")),
@@ -444,6 +452,10 @@ impl Factory {
             .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
 
         let pool_id: u32 = env.storage().instance().get(&DataKey::PoolCount).unwrap();
+        let next_count = pool_id
+            .checked_add(1)
+            .ok_or(FactoryError::PoolCountOverflow)?;
+        let wasm_hash: BytesN<32> = env.storage().instance().get(&DataKey::WasmHash).unwrap();
         let wasm_hash = load_wasm_hash(&env)?;
         let salt = pool_salt(&env, pool_id);
 
@@ -483,7 +495,7 @@ impl Factory {
         bump_pool(&env, pool_id);
         env.storage()
             .instance()
-            .set(&DataKey::PoolCount, &(pool_id + 1));
+            .set(&DataKey::PoolCount, &next_count);
 
         // Emit enriched event so indexers get the full pool parameters in one shot.
         #[allow(deprecated)]
