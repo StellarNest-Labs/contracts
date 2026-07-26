@@ -7,6 +7,11 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum PoolError {
     AlreadyInitialized = 1,
     NotInitialized = 2,
+    /// Returned by `emergency_withdraw` when the pool is not currently paused.
+    NotPaused     = 13,
+    /// Returned by `emergency_withdraw` when the user has no stake or locked position.
+    NoActiveStake = 14,
+    BelowMinimumStake = 15
     InvalidCreditRate = 3,
     NotPaused = 13,
     Paused = 20,
@@ -63,4 +68,5 @@ pub enum DataKey {
     UserStake(Address),
     UserPosition(Address),
     BankedCredits(Address),
+    MinStakeAmount,
 }
