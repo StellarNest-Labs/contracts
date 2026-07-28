@@ -103,7 +103,7 @@ fn setup_with_lock_period(
         &global_multiplier,
         &credit_rate,
         &min_lock_period,
-        &min_stake_amount
+        &min_stake_amount,
     );
 
     let token = TokenClient::new(&env, &asset.address());
@@ -530,9 +530,9 @@ fn test_credit_rate_change_does_not_retroactively_alter_staked_credits() {
     t.client.set_credit_rate(&3i128);
     assert_eq!(t.client.get_credits(&t.user), 10_000);
 
-    t.client.stake(&t.user, &1); // checkpoints under the old rate
+    t.client.stake(&t.user, &100); // checkpoints under the old rate (top-up must clear min_stake_amount)
     advance_ledgers(&t.env, 5);
-    assert_eq!(t.client.get_credits(&t.user), 25_015);
+    assert_eq!(t.client.get_credits(&t.user), 26_500);
 }
 
 #[test]
@@ -544,9 +544,9 @@ fn test_credit_rate_change_does_not_retroactively_alter_locked_credits() {
     t.client.set_credit_rate(&3i128);
     assert_eq!(t.client.calculate_credits(&t.user), 10_000);
 
-    t.client.lock_assets(&t.user, &1); // checkpoints under the old rate
+    t.client.lock_assets(&t.user, &100); // checkpoints under the old rate (top-up must clear min_stake_amount)
     advance_ledgers(&t.env, 5);
-    assert_eq!(t.client.calculate_credits(&t.user), 25_015);
+    assert_eq!(t.client.calculate_credits(&t.user), 26_500);
 }
 
 #[test]
@@ -618,6 +618,7 @@ fn test_initialize_rejects_global_multiplier_above_ceiling() {
         &(MAX_GLOBAL_MULTIPLIER + 1),
         &1i128,
         &0u32,
+        &1i128,
     );
     assert!(matches!(
         result,
@@ -641,6 +642,7 @@ fn test_initialize_rejects_credit_rate_above_ceiling() {
         &2u32,
         &(MAX_CREDIT_RATE + 1),
         &0u32,
+        &1i128,
     );
     assert!(matches!(result, Err(Ok(PoolError::InvalidCreditRate))));
 }
@@ -679,6 +681,7 @@ fn test_compute_credits_no_overflow_at_ceilings() {
         &MAX_GLOBAL_MULTIPLIER,
         &MAX_CREDIT_RATE,
         &0u32,
+        &1i128,
     );
 
     client.stake(&user, &AMOUNT_MAX);
@@ -942,7 +945,7 @@ fn test_unlock_assets_full_returns_tokens_and_credits() {
     assert_eq!(t.token.balance(&t.user), initial_balance);
     assert_eq!(t.token.balance(&t.contract_id), 0);
     assert!(t.client.get_user_position(&t.user).is_none());
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 0);
+    assert_eq!(t.client.calculate_credits(&t.user), 0);
 }
 
 #[test]
@@ -951,8 +954,6 @@ fn test_unlock_assets_partial_keeps_remaining_position() {
     let initial_balance = t.token.balance(&t.user);
     t.client.lock_assets(&t.user, &500);
     advance_ledgers(&t.env, 10);
-    t.client.unlock_assets(&t.user, &400); // partial unlock
-
     t.client.unlock_assets(&t.user, &200); // partial unlock
 
     let pos = t
@@ -1025,7 +1026,7 @@ fn test_unlock_allowed_after_min_lock_period() {
     let t = setup_with_lock_period(1, 1, 100);
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 100); // Should succeed at exactly the boundary.
-    // Should succeed — no panic.
+                                  // Should succeed — no panic.
     t.client.unlock_assets(&t.user, &1_000);
     assert!(t.client.get_user_position(&t.user).is_none());
 }
@@ -1070,7 +1071,7 @@ fn test_new_positions_use_updated_min_lock_period() {
 #[test]
 fn test_calculate_credits_zero_without_position() {
     let t = setup(1, 1);
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 0);
+    assert_eq!(t.client.calculate_credits(&t.user), 0);
 }
 
 #[test]
@@ -1079,7 +1080,7 @@ fn test_calculate_credits_accrues_over_time() {
     let t = setup(1, 2);
     t.client.lock_assets(&t.user, &500);
     advance_ledgers(&t.env, 20);
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 20_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 20_000);
 }
 
 #[test]
@@ -1091,7 +1092,7 @@ fn test_calculate_credits_includes_banked_plus_accruing() {
     advance_ledgers(&t.env, 10);
     t.client.lock_assets(&t.user, &500); // banks 10000
     advance_ledgers(&t.env, 10);
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 25_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 25_000);
 }
 
 #[test]
@@ -1103,7 +1104,7 @@ fn test_calculate_credits_reflects_partial_unlock_checkpoint() {
     advance_ledgers(&t.env, 10);
     t.client.unlock_assets(&t.user, &400); // banks 10000 into pos.total_credits
     advance_ledgers(&t.env, 5);
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 13_000);
+    assert_eq!(t.client.calculate_credits(&t.user), 13_000);
 }
 
 // ── get_user_position tests ───────────────────────────────────────────────────
@@ -1111,7 +1112,7 @@ fn test_calculate_credits_reflects_partial_unlock_checkpoint() {
 #[test]
 fn test_get_user_position_none_before_lock() {
     let t = setup(1, 1);
-    assert!(t.client.get_user_position(&t.user).unwrap().is_none());
+    assert!(t.client.get_user_position(&t.user).is_none());
 }
 
 #[test]
@@ -1119,7 +1120,7 @@ fn test_get_user_position_returns_correct_fields() {
     let t = setup(1, 1);
     let start = t.env.ledger().sequence();
     t.client.lock_assets(&t.user, &750);
-    let pos = t.client.get_user_position(&t.user).unwrap().unwrap();
+    let pos = t.client.get_user_position(&t.user).unwrap();
     assert_eq!(pos.amount, 750);
     assert_eq!(pos.lock_ledger, start);
     assert_eq!(pos.unlock_ledger, start);
@@ -1134,7 +1135,7 @@ fn test_get_user_position_none_after_full_unlock() {
     t.client.lock_assets(&t.user, &1_000);
     advance_ledgers(&t.env, 5);
     t.client.unlock_assets(&t.user, &1_000);
-    assert!(t.client.get_user_position(&t.user).unwrap().is_none());
+    assert!(t.client.get_user_position(&t.user).is_none());
 }
 
 // ── pause / unpause tests ─────────────────────────────────────────────────────
@@ -1142,14 +1143,14 @@ fn test_get_user_position_none_after_full_unlock() {
 #[test]
 fn test_pool_not_paused_initially() {
     let t = setup(1, 1);
-    assert!(!t.client.is_paused().unwrap());
+    assert!(!t.client.is_paused());
 }
 
 #[test]
 fn test_pause_blocks_lock_assets() {
     let t = setup(1, 1);
     t.client.pause();
-    assert!(t.client.is_paused().unwrap());
+    assert!(t.client.is_paused());
     assert!(t.client.try_lock_assets(&t.user, &100i128).is_err());
     assert!(t.client.is_paused());
 
@@ -1176,7 +1177,7 @@ fn test_unpause_restores_operations() {
     let t = setup(1, 1);
     t.client.pause();
     t.client.unpause();
-    assert!(!t.client.is_paused().unwrap());
+    assert!(!t.client.is_paused());
     // Lock and unlock should work again.
     t.client.lock_assets(&t.user, &500);
     t.client.unlock_assets(&t.user, &500);
@@ -1220,7 +1221,7 @@ fn test_unpause_restores_stake() {
     t.client.pause();
     t.client.unpause();
     t.client.stake(&t.user, &500);
-    assert_eq!(t.client.get_stake(&t.user).unwrap().unwrap().amount, 500);
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 500);
 }
 
 #[test]
@@ -1238,7 +1239,7 @@ fn test_unpause_restores_unstake() {
     t.client.pause();
     t.client.unpause();
     t.client.unstake(&t.user);
-    assert!(t.client.get_stake(&t.user).unwrap().is_none());
+    assert!(t.client.get_stake(&t.user).is_none());
 }
 
 #[test]
@@ -1257,7 +1258,7 @@ fn test_unpause_restores_set_boost() {
     t.client.unpause();
     t.client.set_boost(&t.user, &50u32);
     assert_eq!(
-        t.client.get_boost_config(&t.user).unwrap().unwrap().allocation_pct,
+        t.client.get_boost_config(&t.user).unwrap().allocation_pct,
         50
     );
 }
@@ -1269,7 +1270,7 @@ fn test_set_global_multiplier_callable_while_paused() {
     t.client.set_boost(&t.user, &50u32);
     t.client.pause();
     t.client.set_global_multiplier(&3u32);
-    assert_eq!(t.client.get_boost_config(&t.user).unwrap().unwrap().multiplier, 3);
+    assert_eq!(t.client.get_boost_config(&t.user).unwrap().multiplier, 3);
 }
 
 // ── multi-user isolation ──────────────────────────────────────────────────────
@@ -1283,8 +1284,8 @@ fn test_multiple_users_independent_positions() {
     t.client.lock_assets(&user2, &2_000);
     advance_ledgers(&t.env, 10);
     // Each user's credits are independent.
-    assert_eq!(t.client.calculate_credits(&t.user).unwrap(), 10_000); // 1000 * 10
-    assert_eq!(t.client.calculate_credits(&user2).unwrap(), 20_000); // 2000 * 10
+    assert_eq!(t.client.calculate_credits(&t.user), 10_000); // 1000 * 10
+    assert_eq!(t.client.calculate_credits(&user2), 20_000); // 2000 * 10
 }
 
 #[test]
@@ -1300,7 +1301,6 @@ fn test_one_user_unlock_does_not_affect_another() {
     let pos2 = t
         .client
         .get_user_position(&user2)
-        .unwrap()
         .expect("user2 position should exist");
     assert_eq!(pos2.amount, 2_000);
 }
@@ -1351,13 +1351,13 @@ fn test_whitelist_disabled_by_default_allows_all() {
     let t = setup(2, 1);
     // User can stake when whitelist is not enabled (disabled by default)
     t.client.stake(&t.user, &1_000);
-    assert_eq!(t.client.get_stake(&t.user).unwrap().unwrap().amount, 1_000);
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 1_000);
 
     // User can lock when whitelist is not enabled
     let user2 = Address::generate(&t.env);
     t.token_sac.mint(&user2, &500_000i128);
     t.client.lock_assets(&user2, &500);
-    assert_eq!(t.client.get_user_position(&user2).unwrap().unwrap().amount, 500);
+    assert_eq!(t.client.get_user_position(&user2).unwrap().amount, 500);
 }
 
 #[test]
@@ -1389,8 +1389,8 @@ fn test_user_added_and_removed_from_whitelist() {
     // Now user can stake and lock
     t.client.stake(&t.user, &1_000);
     t.client.lock_assets(&t.user, &500);
-    assert_eq!(t.client.get_stake(&t.user).unwrap().unwrap().amount, 1_000);
-    assert_eq!(t.client.get_user_position(&t.user).unwrap().unwrap().amount, 500);
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 1_000);
+    assert_eq!(t.client.get_user_position(&t.user).unwrap().amount, 500);
 
     // Remove user from whitelist
     t.client.remove_from_whitelist(&t.user);
@@ -1414,7 +1414,7 @@ fn test_disable_whitelist_restores_open_access() {
 
     // Stake succeeds now
     t.client.stake(&t.user, &1_000);
-    assert_eq!(t.client.get_stake(&t.user).unwrap().unwrap().amount, 1_000);
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 1_000);
 }
 
 #[test]
@@ -1446,9 +1446,9 @@ fn test_batch_add_to_whitelist() {
     t.client.stake(&user2, &100);
     t.client.stake(&user3, &100);
 
-    assert_eq!(t.client.get_stake(&user1).unwrap().unwrap().amount, 100);
-    assert_eq!(t.client.get_stake(&user2).unwrap().unwrap().amount, 100);
-    assert_eq!(t.client.get_stake(&user3).unwrap().unwrap().amount, 100);
+    assert_eq!(t.client.get_stake(&user1).unwrap().amount, 100);
+    assert_eq!(t.client.get_stake(&user2).unwrap().amount, 100);
+    assert_eq!(t.client.get_stake(&user3).unwrap().amount, 100);
 }
 
 #[test]
@@ -1460,9 +1460,10 @@ fn test_batch_add_to_whitelist_exceeds_limit() {
         users.push_back(Address::generate(&t.env));
     }
     t.client.batch_add_to_whitelist(&users);
+}
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_set_min_stake_amount_lock_assets() {
     let t = setup(1, 1);
 
@@ -1470,7 +1471,7 @@ fn test_set_min_stake_amount_lock_assets() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #15)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_set_min_stake_amount_stake() {
     let t = setup(1, 1);
 
@@ -1483,7 +1484,6 @@ fn test_set_min_stake_amount_lock_assets_pass() {
 
     t.client.lock_assets(&t.user, &100i128);
 }
-
 
 #[test]
 fn test_set_min_stake_amount() {
@@ -1533,7 +1533,7 @@ fn test_lock_assets_reentrant_transfer_is_rejected_and_final_state_is_correct() 
     let token_client = MockReentrantTokenClient::new(&env, &token_id);
     token_client.configure(&farming_pool_id, &user);
 
-    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32);
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
 
     // Succeeds fully: the mock token catches the rejected reentry gracefully
     // (via try_invoke_contract) rather than trapping the whole call.
@@ -1564,7 +1564,7 @@ fn test_lock_assets_reverts_entirely_if_stake_token_naively_reenters() {
     let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
     token_client.configure(&farming_pool_id, &user);
 
-    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32);
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
 
     // The naive mock token doesn't catch the host's rejection, so the
     // reentrant call traps — and with it, the entire lock_assets invocation,

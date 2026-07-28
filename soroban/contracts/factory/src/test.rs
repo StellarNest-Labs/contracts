@@ -7,12 +7,10 @@ use soroban_sdk::{
         storage::Persistent as _, Address as _, AuthorizedFunction, AuthorizedInvocation,
         Events as _, Ledger, MockAuth, MockAuthInvoke,
     },
-    token::{StellarAssetClient, TokenClient},
     vec, Address, BytesN, Env, IntoVal, Symbol,
 };
 
-use farming_pool::{FarmingPoolClient, PoolError as PoolContractError};
-
+use farming_pool::FarmingPoolClient;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -178,7 +176,7 @@ fn test_pool_wasm_hash_uninitialized_returns_not_initialized() {
 fn test_create_pool_uninitialized_returns_not_initialized() {
     let (env, client) = setup_uninitialized();
     let asset = Address::generate(&env);
-    match client.try_create_pool(&asset, &1_000u128, &86_400u64) {
+    match client.try_create_pool(&asset, &1_000u128, &2u32, &86_400u64, &0i128) {
         Err(Ok(FactoryError::NotInitialized)) => {}
         _ => panic!("expected FactoryError::NotInitialized"),
     }
@@ -216,7 +214,7 @@ fn test_list_pools_uninitialized_returns_not_initialized() {
 fn test_get_pools_by_asset_uninitialized_returns_not_initialized() {
     let (env, client) = setup_uninitialized();
     let asset = Address::generate(&env);
-    match client.try_get_pools_by_asset(&asset) {
+    match client.try_get_pools_by_asset(&asset, &0u32, &10u32) {
         Err(Ok(FactoryError::NotInitialized)) => {}
         _ => panic!("expected FactoryError::NotInitialized"),
     }
@@ -431,9 +429,13 @@ fn test_transfer_admin_emits_event_with_old_and_new_admin() {
 fn test_upgrade_pool_hot_swaps_registered_pool_without_changing_factory_hash() {
     let t = setup();
     let original_factory_hash = t.client.pool_wasm_hash();
-    let pool_id = t
-        .client
-        .create_pool(&Address::generate(&t.env), &1_728_000u128, &2u32, &10u64);
+    let pool_id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &1_728_000u128,
+        &2u32,
+        &10u64,
+        &0i128,
+    );
     let pool_addr = t.client.get_pool(&pool_id).address;
 
     let new_wasm_hash = upload_replacement_wasm(&t.env);
@@ -490,9 +492,13 @@ fn test_upgrade_pool_missing_pool_returns_not_found() {
 #[test]
 fn test_upgrade_pool_requires_factory_admin_auth() {
     let t = setup();
-    let pool_id = t
-        .client
-        .create_pool(&Address::generate(&t.env), &1_728_000u128, &2u32, &10u64);
+    let pool_id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &1_728_000u128,
+        &2u32,
+        &10u64,
+        &0i128,
+    );
 
     let not_admin = Address::generate(&t.env);
     let new_wasm_hash = t.wasm_hash.clone();
@@ -536,7 +542,7 @@ fn test_create_pool_rejects_missing_pool_wasm_hash() {
     client2.initialize(&admin, &wasm_hash2);
 
     let asset = Address::generate(&env2);
-    let result = client2.try_create_pool(&asset, &17_280_000u128, &2u32, &86_400u64);
+    let result = client2.try_create_pool(&asset, &17_280_000u128, &2u32, &86_400u64, &0i128);
     assert!(
         result.is_err(),
         "create_pool must reject an unknown pool WASM hash"
@@ -555,8 +561,20 @@ fn test_create_pool_returns_incrementing_ids() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    let id_a = client.create_pool(&Address::generate(&env), &8_640_000u128, &2u32, &100u64);
-    let id_b = client.create_pool(&Address::generate(&env), &17_280_000u128, &3u32, &200u64);
+    let id_a = client.create_pool(
+        &Address::generate(&env),
+        &8_640_000u128,
+        &2u32,
+        &100u64,
+        &0i128,
+    );
+    let id_b = client.create_pool(
+        &Address::generate(&env),
+        &17_280_000u128,
+        &3u32,
+        &200u64,
+        &0i128,
+    );
     assert_eq!(id_a, 0);
     assert_eq!(id_b, 1);
     assert_eq!(client.pool_count(), 2);
@@ -573,7 +591,7 @@ fn test_get_pool_returns_correct_record() {
     client.initialize(&admin, &wasm_hash);
 
     let asset = Address::generate(&env);
-    let id = client.create_pool(&asset, &4_320_000u128, &2u32, &50u64);
+    let id = client.create_pool(&asset, &4_320_000u128, &2u32, &50u64, &0i128);
     let record = client.get_pool(&id);
     assert_eq!(record.asset, asset);
     assert_eq!(record.credit_rate, 250);
@@ -594,9 +612,9 @@ fn test_get_pools_by_asset_returns_matching_ids() {
     let asset_a = Address::generate(&env);
     let asset_b = Address::generate(&env);
 
-    let id_0 = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64);
-    let id_1 = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64);
-    let id_2 = client.create_pool(&asset_a, &5_184_000u128, &2u32, &30u64);
+    let id_0 = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64, &0i128);
+    let id_1 = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64, &0i128);
+    let id_2 = client.create_pool(&asset_a, &5_184_000u128, &2u32, &30u64, &0i128);
 
     let by_a = client.get_pools_by_asset(&asset_a, &0u32, &10u32);
     assert_eq!(by_a.records.len(), 2);
@@ -618,7 +636,13 @@ fn test_get_pools_by_asset_unknown_asset_returns_empty() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    client.create_pool(&Address::generate(&env), &1_728_000u128, &2u32, &10u64);
+    client.create_pool(
+        &Address::generate(&env),
+        &1_728_000u128,
+        &2u32,
+        &10u64,
+        &0i128,
+    );
     let unknown = Address::generate(&env);
     let result = client.get_pools_by_asset(&unknown, &0u32, &10u32);
     assert_eq!(result.records.len(), 0);
@@ -642,8 +666,8 @@ fn test_get_pools_by_asset_paginates_large_matching_registry() {
             &(1_728_000 + i as u128 * 17_280),
             &2u32,
             &(10 + i as u64),
+            &0i128,
         );
-        client.create_pool(&asset, &((100 + i as u128) * 17_280), &2u32, &(10 + i as u64));
     }
 
     // First page should return 20 records
@@ -679,7 +703,13 @@ fn test_create_pool_emits_pool_crtd_event() {
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
-    client.create_pool(&Address::generate(&env), &5_184_000u128, &2u32, &30u64);
+    client.create_pool(
+        &Address::generate(&env),
+        &5_184_000u128,
+        &2u32,
+        &30u64,
+        &0i128,
+    );
     assert!(
         !env.events().all().events().is_empty(),
         "expected pool_crtd event"
@@ -697,8 +727,8 @@ fn test_multiple_pools_stored_independently() {
     client.initialize(&admin, &wasm_hash);
     let asset_a = Address::generate(&env);
     let asset_b = Address::generate(&env);
-    let id_a = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64);
-    let id_b = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64);
+    let id_a = client.create_pool(&asset_a, &1_728_000u128, &2u32, &10u64, &0i128);
+    let id_b = client.create_pool(&asset_b, &3_456_000u128, &2u32, &20u64, &0i128);
     let rec_a = client.get_pool(&id_a);
     let rec_b = client.get_pool(&id_b);
     assert_eq!(rec_a.asset, asset_a);
@@ -711,7 +741,7 @@ fn test_create_pool_rejects_unmatched_non_admin_auth() {
     let t = setup();
     let not_admin = Address::generate(&t.env);
     let asset = Address::generate(&t.env);
-    let args = (&asset, 17_280_000u128, 2u32, 86_400u64).into_val(&t.env);
+    let args = (&asset, 17_280_000u128, 2u32, 86_400u64, 0i128).into_val(&t.env);
     let invoke = MockAuthInvoke {
         contract: &t.factory_addr,
         fn_name: "create_pool",
@@ -724,7 +754,7 @@ fn test_create_pool_rejects_unmatched_non_admin_auth() {
             address: &not_admin,
             invoke: &invoke,
         }])
-        .try_create_pool(&asset, &17_280_000u128, &2u32, &86_400u64);
+        .try_create_pool(&asset, &17_280_000u128, &2u32, &86_400u64, &0i128);
 
     assert!(
         result.is_err(),
@@ -738,15 +768,23 @@ fn test_create_pool_increments_count_after_each_pool() {
     let t = setup();
 
     assert_eq!(t.client.pool_count(), 0);
-    let id_a = t
-        .client
-        .create_pool(&Address::generate(&t.env), &8_640_000u128, &2u32, &100u64);
+    let id_a = t.client.create_pool(
+        &Address::generate(&t.env),
+        &8_640_000u128,
+        &2u32,
+        &100u64,
+        &0i128,
+    );
     assert_eq!(id_a, 0);
     assert_eq!(t.client.pool_count(), 1);
 
-    let id_b = t
-        .client
-        .create_pool(&Address::generate(&t.env), &17_280_000u128, &2u32, &200u64);
+    let id_b = t.client.create_pool(
+        &Address::generate(&t.env),
+        &17_280_000u128,
+        &2u32,
+        &200u64,
+        &0i128,
+    );
     assert_eq!(id_b, 1);
     assert_eq!(t.client.pool_count(), 2);
 }
@@ -762,9 +800,13 @@ fn test_create_pool_returns_typed_error_when_pool_count_overflows() {
             .set(&DataKey::PoolCount, &u32::MAX);
     });
 
-    let result =
-        t.client
-            .try_create_pool(&Address::generate(&t.env), &1_728_000u128, &2u32, &100u64);
+    let result = t.client.try_create_pool(
+        &Address::generate(&t.env),
+        &1_728_000u128,
+        &2u32,
+        &100u64,
+        &0i128,
+    );
 
     assert_eq!(result, Err(Ok(FactoryError::PoolCountOverflow)));
     assert_eq!(t.client.pool_count(), u32::MAX);
@@ -780,7 +822,9 @@ fn test_create_pool_uses_deterministic_pool_addresses() {
     let expected_before = expected_pool_address(&t.env, &t.factory_addr, 0);
     let expected_again = expected_pool_address(&t.env, &t.factory_addr, 0);
 
-    let id = t.client.create_pool(&asset, &4_320_000u128, &2u32, &50u64);
+    let id = t
+        .client
+        .create_pool(&asset, &4_320_000u128, &2u32, &50u64, &0i128);
     let record = t.client.get_pool(&id);
 
     assert_eq!(id, 0);
@@ -797,7 +841,9 @@ fn test_create_pool_rejects_zero_daily_rate() {
     // truncates to zero, which FarmingPool::initialize would reject anyway
     // (credit_rate must be > 0) — create_pool must catch this itself rather
     // than deploying a pool that can never be initialized.
-    let result = t.client.try_create_pool(&asset, &0u128, &2u32, &25u64);
+    let result = t
+        .client
+        .try_create_pool(&asset, &0u128, &2u32, &25u64, &0i128);
     assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
     assert_eq!(t.client.pool_count(), 0);
 }
@@ -807,7 +853,9 @@ fn test_create_pool_rejects_daily_rate_below_ledgers_per_day() {
     let t = setup();
     let asset = Address::generate(&t.env);
 
-    let result = t.client.try_create_pool(&asset, &17_279u128, &2u32, &25u64);
+    let result = t
+        .client
+        .try_create_pool(&asset, &17_279u128, &2u32, &25u64, &0i128);
     assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
 }
 
@@ -818,7 +866,7 @@ fn test_create_pool_rejects_global_multiplier_below_one() {
 
     let result = t
         .client
-        .try_create_pool(&asset, &1_728_000u128, &0u32, &25u64);
+        .try_create_pool(&asset, &1_728_000u128, &0u32, &25u64, &0i128);
     assert_eq!(result, Err(Ok(FactoryError::InvalidGlobalMultiplier)));
 }
 
@@ -830,16 +878,20 @@ fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
     let too_large = (u32::MAX as u64) + 1;
     let result = t
         .client
-        .try_create_pool(&asset, &1_728_000u128, &2u32, &too_large);
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &too_large, &0i128);
     assert_eq!(result, Err(Ok(FactoryError::MinLockPeriodOutOfRange)));
 }
 
 #[test]
 fn test_get_pool_bumps_pool_record_ttl() {
     let t = setup();
-    let id = t
-        .client
-        .create_pool(&Address::generate(&t.env), &4_320_000u128, &2u32, &50u64);
+    let id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &4_320_000u128,
+        &2u32,
+        &50u64,
+        &0i128,
+    );
 
     assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
 
@@ -853,10 +905,13 @@ fn test_get_pool_bumps_pool_record_ttl() {
 #[test]
 fn test_refresh_pool_ttls_restores_ttl_for_unqueried_pool() {
     let t = setup();
-    let id = t
-        .client
-        .create_pool(&Address::generate(&t.env), &1_728_000u128, &2u32, &50u64);
-        .create_pool(&Address::generate(&t.env), &(250u128 * 17_280), &2u32, &50u64);
+    let id = t.client.create_pool(
+        &Address::generate(&t.env),
+        &1_728_000u128,
+        &2u32,
+        &50u64,
+        &0i128,
+    );
 
     // Initial TTL after creation
     assert_eq!(pool_record_ttl(&t.env, &t.factory_addr, id), TTL_EXTEND_TO);
@@ -877,7 +932,9 @@ fn test_create_pool_emits_pool_crtd_event_with_payload() {
     let t = setup();
     let asset = Address::generate(&t.env);
     let expected_address = expected_pool_address(&t.env, &t.factory_addr, 0);
-    let id = t.client.create_pool(&asset, &5_184_000u128, &2u32, &30u64);
+    let id = t
+        .client
+        .create_pool(&asset, &5_184_000u128, &2u32, &30u64, &0i128);
 
     assert_eq!(
         t.env.events().all(),
@@ -903,7 +960,7 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
     t.client.transfer_admin(&new_admin);
 
     let old_asset = Address::generate(&t.env);
-    let old_args = (&old_asset, 1_728_000u128, 2u32, 10u64).into_val(&t.env);
+    let old_args = (&old_asset, 1_728_000u128, 2u32, 10u64, 0i128).into_val(&t.env);
     let old_invoke = MockAuthInvoke {
         contract: &t.factory_addr,
         fn_name: "create_pool",
@@ -916,7 +973,7 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
             address: &t.admin,
             invoke: &old_invoke,
         }])
-        .try_create_pool(&old_asset, &1_728_000u128, &2u32, &10u64);
+        .try_create_pool(&old_asset, &1_728_000u128, &2u32, &10u64, &0i128);
 
     assert!(
         old_result.is_err(),
@@ -925,7 +982,7 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
     assert_eq!(t.client.pool_count(), 0);
 
     let new_asset = Address::generate(&t.env);
-    let new_args = (&new_asset, 3_456_000u128, 2u32, 20u64).into_val(&t.env);
+    let new_args = (&new_asset, 3_456_000u128, 2u32, 20u64, 0i128).into_val(&t.env);
     let new_invoke = MockAuthInvoke {
         contract: &t.factory_addr,
         fn_name: "create_pool",
@@ -938,44 +995,37 @@ fn test_old_admin_cannot_create_pool_after_transfer_but_new_admin_can() {
             address: &new_admin,
             invoke: &new_invoke,
         }])
-        .create_pool(&new_asset, &3_456_000u128, &2u32, &20u64);
+        .create_pool(&new_asset, &3_456_000u128, &2u32, &20u64, &0i128);
 
     assert_eq!(new_id, 0);
-assert_eq!(t.client.pool_count(), 1);
+    assert_eq!(t.client.pool_count(), 1);
 }
 
 #[test]
-fn test_create_pool_deploys_uninitialized_real_farming_pool() {
-    // Root-cause regression test:
-    // factory::create_pool deploys the farming-pool WASM with init args `()` and
-    // never calls FarmingPool::initialize, so any initialized-only entrypoint
-    // must return PoolError::NotInitialized.
-
+fn test_create_pool_initializes_real_farming_pool_atomically() {
+    // Regression test for #79/#80: create_pool must call the deployed pool's
+    // own `initialize` in the same transaction as the deploy, so there is no
+    // window where an uninitialized pool address is observable on-chain.
+    //
+    // NOTE: We cannot reuse `MOCK_POOL_WASM` here, because that stub contract does
+    // not implement FarmingPool entrypoints.
     let env = Env::default();
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
     let factory_addr = env.register(Factory, ());
 
-    // Upload the mock WASM hash matching the real farming-pool contract WASM.
-    // This test purposefully asserts that the deployed pool is *not* initialized.
-    //
-    // NOTE: We cannot reuse `MOCK_POOL_WASM` here, because that stub contract does
-    // not implement FarmingPool entrypoints.
     let wasm_hash = env.deployer().upload_contract_wasm(farming_pool::WASM);
     let client = FactoryClient::new(&env, &factory_addr);
     client.initialize(&admin, &wasm_hash);
 
     let asset = Address::generate(&env);
-    let pool_id = client.create_pool(&asset, &100u128, &10u64);
+    let pool_id = client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
     let record = client.get_pool(&pool_id);
 
     let pool_client = FarmingPoolClient::new(&env, &record.address);
 
-    // Any initialized-only function should fail with NotInitialized.
-    // `stake` also requires the caller to be auth'd; env.mock_all_auths() satisfies that.
-    let user = Address::generate(&env);
-    let res = pool_client.try_stake(&user, &1_000i128);
-    assert_eq!(res, Err(Ok(PoolContractError::NotInitialized)));
+    // The pool must already be initialized: an initialized-only getter must
+    // succeed and return the factory's admin, not panic with NotInitialized.
+    assert_eq!(pool_client.admin(), admin);
 }
-

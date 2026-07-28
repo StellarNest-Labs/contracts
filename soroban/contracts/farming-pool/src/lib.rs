@@ -5,10 +5,7 @@
 mod mock_reentrant_token;
 mod types;
 
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Vec};
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
-use types::{BoostConfig, DataKey, PoolError, Position, UserStake};
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Vec};
 pub use types::PoolError;
 use types::{BoostConfig, DataKey, Position, UserStake};
 
@@ -18,16 +15,30 @@ use types::{BoostConfig, DataKey, Position, UserStake};
 // Gated behind `testutils` feature (enabled by factory's dev-dependency) so it
 // is never included in on-chain release builds.
 #[cfg(any(test, feature = "testutils"))]
-pub const WASM: &[u8] = soroban_sdk::contractfile!(
-    file = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../target/wasm32v1-none/release/farming_pool.wasm"
-    ),
-);
+mod wasm_import {
+    // Scoped in its own module (per contractimport!'s documented pattern) so
+    // its generated `WASM`/`Client` items don't collide with this crate's
+    // own `#[contract]`-generated names. No sha256 pinning here — unlike
+    // contractfile!, contractimport! doesn't require it, which matters
+    // because this WASM is our own sibling crate's freshly-built output on
+    // every CI run, not a fixed external artifact: Rust/LLVM codegen isn't
+    // bit-for-bit reproducible across separate `cargo build` invocations of
+    // the same source, so a hardcoded hash here would break intermittently
+    // for reasons unrelated to any real content change.
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/farming_pool.wasm");
+}
+#[cfg(any(test, feature = "testutils"))]
+pub use wasm_import::WASM;
 
 // Persistent-storage TTL: extend to ~60 days if below ~30 days (at ~5s/ledger).
 const USER_TTL_THRESHOLD: u32 = 518_400;
 const USER_TTL_EXTEND_TO: u32 = 1_036_800;
+
+/// Current contract schema version, written by `initialize`/`migrate`. A pool
+/// deployed before `SchemaVersion` was tracked at all reads back `SCHEMA_VERSION`
+/// via `read_schema_version`'s `unwrap_or`, so it's treated as already current
+/// rather than needing a migration.
+const SCHEMA_VERSION: u32 = 1;
 
 /// Sanity ceilings on `global_multiplier` and `credit_rate` (see #89).
 ///
@@ -320,6 +331,8 @@ impl FarmingPool {
         env.storage()
             .instance()
             .set(&DataKey::MinStakeAmount, &min_stake_amount);
+        env.storage()
+            .instance()
             .set(&DataKey::SchemaVersion, &SCHEMA_VERSION);
         bump_instance(&env);
         Ok(())
@@ -327,15 +340,13 @@ impl FarmingPool {
 
     pub fn admin(env: Env) -> Result<Address, PoolError> {
         bump_instance(&env);
-        get_admin(&env).unwrap()
+        get_admin(&env)
     }
 
     /// Admin: transfer admin rights to `new_admin`. Current admin must authorise.
     ///
     /// Supports key rotation and governance handoffs without redeploying the pool.
     /// Emits a `("pool", "adm_xfr")` event with `(old_admin, new_admin)`.
-    pub fn transfer_admin(env: Env, new_admin: Address) {
-        let current = get_admin(&env).unwrap();
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
         let current = get_admin(&env)?;
         current.require_auth();
@@ -389,7 +400,8 @@ impl FarmingPool {
 
         if whitelist_enabled(&env) && !is_user_whitelisted(&env, &user) {
             return Err(PoolError::NotWhitelisted);
-        let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
+        }
+        let min_stake = Self::get_min_stake_amount(env.clone())?;
         if amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
         }
@@ -492,9 +504,6 @@ impl FarmingPool {
         let elapsed = env
             .ledger()
             .sequence()
-            .saturating_sub(pos.checkpoint_ledger);
-        pos.total_credits + pos.amount * rate * elapsed as i128;
-        Ok(pos.total_credits + pos.amount * rate * elapsed as i128)
             .saturating_sub(position.checkpoint_ledger);
         Ok(position.total_credits + position.amount * position.credit_rate * elapsed as i128)
     }
@@ -532,7 +541,6 @@ impl FarmingPool {
     }
 
     pub fn emergency_withdraw(env: Env, user: Address) -> Result<i128, PoolError> {
-        get_admin(&env).unwrap().require_auth();
         require_initialized(&env)?;
         let admin = get_admin(&env)?;
         admin.require_auth();
@@ -541,9 +549,6 @@ impl FarmingPool {
         }
         bump_instance(&env);
 
-        let mut total_returned: i128 = 0;
-        let mut banked_credits: i128 = 0;
-        let token = token::TokenClient::new(&env, &get_stake_token(&env).unwrap());
         let mut total_returned = 0i128;
         let mut banked_credits = 0i128;
         let stake_token = get_stake_token(&env)?;
@@ -595,7 +600,9 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         bump_instance(&env);
-        env.storage().instance().set(&DataKey::WhitelistEnabled, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::WhitelistEnabled, &true);
         Ok(())
     }
 
@@ -604,7 +611,9 @@ impl FarmingPool {
         require_initialized(&env)?;
         get_admin(&env)?.require_auth();
         bump_instance(&env);
-        env.storage().instance().set(&DataKey::WhitelistEnabled, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::WhitelistEnabled, &false);
         Ok(())
     }
 
@@ -664,7 +673,8 @@ impl FarmingPool {
 
         if whitelist_enabled(&env) && !is_user_whitelisted(&env, &from) {
             return Err(PoolError::NotWhitelisted);
-        let min_stake = Self::get_min_stake_amount(env.clone()).unwrap();
+        }
+        let min_stake = Self::get_min_stake_amount(env.clone())?;
         if amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
         }
@@ -850,8 +860,6 @@ impl FarmingPool {
         let allocation_pct = get_user_boost(&env, &user).unwrap_or(0);
         let multiplier = read_global_multiplier(&env);
         let elapsed = env.ledger().sequence().saturating_sub(stake.start_ledger);
-        stake.credits_banked
-            + compute_credits(stake.amount, allocation_pct, multiplier, rate, elapsed);
         Ok(stake.credits_banked
             + compute_credits(
                 stake.amount,
@@ -874,15 +882,16 @@ impl FarmingPool {
         Ok(())
     }
     /// Return the current min stake amount , or `None` if not staked.
-    pub fn get_min_stake_amount(env: Env) -> Result<i128, PoolError>  {
+    pub fn get_min_stake_amount(env: Env) -> Result<i128, PoolError> {
         require_initialized(&env)?;
-        let min_stake = env.storage().instance()
+        let min_stake = env
+            .storage()
+            .instance()
             .get::<DataKey, i128>(&DataKey::MinStakeAmount)
             .unwrap_or(1);
 
         Ok(min_stake)
     }
-
 
     /// Return the current stake record for `user`, or `None` if not staked.
     pub fn get_stake(env: Env, user: Address) -> Result<Option<UserStake>, PoolError> {
