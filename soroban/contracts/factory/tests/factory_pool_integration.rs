@@ -96,9 +96,13 @@ fn deploy_pool_via_factory(
     let factory_client = FactoryClient::new(env, &factory_addr);
     factory_client.initialize(admin, &wasm_hash);
 
-    let pool_id =
-        factory_client.create_pool(asset, &daily_rate, &global_multiplier, &min_lock_period);
-    let pool_id = factory_client.create_pool(asset, &daily_rate, &global_multiplier, &min_lock_period);
+    let pool_id = factory_client.create_pool(
+        asset,
+        &daily_rate,
+        &global_multiplier,
+        &min_lock_period,
+        &0i128,
+    );
     let record = factory_client.get_pool(&pool_id);
     let pool_address = record.address.clone();
 
@@ -124,8 +128,7 @@ fn smoke_create_pool_returns_live_pool_address() {
     let factory_client = FactoryClient::new(&env, &factory_addr);
     factory_client.initialize(&admin, &wasm_hash);
 
-    let pool_id = factory_client.create_pool(&asset, &1_728_000u128, &2u32, &10u64);
-    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64);
+    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64, &0i128);
     let record = factory_client.get_pool(&pool_id);
 
     // The deployed pool exists at a real address the factory tracked, and it
@@ -154,7 +157,7 @@ fn test_create_pool_pool_admin_is_set_atomically() {
     let factory_client = FactoryClient::new(&env, &factory_addr);
     factory_client.initialize(&admin, &wasm_hash);
 
-    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64);
+    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64, &0i128);
     let record = factory_client.get_pool(&pool_id);
 
     let pool_client = FarmingPoolClient::new(&env, &record.address);
@@ -182,11 +185,11 @@ fn test_third_party_cannot_reinitialize_deployed_pool() {
     let factory_client = FactoryClient::new(&env, &factory_addr);
     factory_client.initialize(&admin, &wasm_hash);
 
-    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64);
+    let pool_id = factory_client.create_pool(&asset, &17_280u128, &1u32, &10u64, &0i128);
     let record = factory_client.get_pool(&pool_id);
 
     let pool_client = FarmingPoolClient::new(&env, &record.address);
-    let result = pool_client.try_initialize(&attacker, &asset, &1u32, &1i128, &10u32);
+    let result = pool_client.try_initialize(&attacker, &asset, &1u32, &1i128, &10u32, &1i128);
     assert_eq!(result, Err(Ok(PoolError::AlreadyInitialized)));
 
     // The rejected re-initialize attempt must not have changed anything.
@@ -228,10 +231,6 @@ fn end_to_end_create_pool_then_stake_and_unstake() {
         &admin,
         &asset.address(),
         daily_rate,
-        global_multiplier,
-        min_lock_period as u64,
-    );
-
         1u32,
         min_lock_period as u64,
     );
@@ -309,7 +308,6 @@ fn end_to_end_create_pool_then_lock_and_unlock() {
     token_sac.mint(&user, &INITIAL_MINT);
 
     let global_multiplier = 1u32;
-    let daily_rate = 34_560u128;
     // global_multiplier is passed as 1 at creation — this test only
     // exercises lock/unlock, which isn't affected by it.
     let credit_rate = 2i128;
@@ -325,10 +323,6 @@ fn end_to_end_create_pool_then_lock_and_unlock() {
         &asset.address(),
         daily_rate,
         global_multiplier,
-        min_lock_period_ledgers as u64,
-    );
-
-        1u32,
         min_lock_period_ledgers as u64,
     );
 

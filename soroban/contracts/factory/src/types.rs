@@ -68,8 +68,6 @@ pub enum FactoryError {
     /// also by the read-only getters that would otherwise report a misleading
     /// empty registry for a factory that does not exist yet.
     NotInitialized = 4,
-    /// `create_pool`'s `global_multiplier` was < 1 (mirrors `FarmingPool::initialize`'s own check).
-    InvalidGlobalMultiplier = 4,
     /// `create_pool`'s `daily_rate` converts to a `credit_rate` of zero (or doesn't fit `i128`).
     ///
     /// `FarmingPool::initialize` requires `credit_rate > 0`; a `daily_rate` below
@@ -79,8 +77,8 @@ pub enum FactoryError {
     InvalidCreditRate = 5,
     /// `create_pool`'s `min_lock_period` does not fit in the pool's native `u32`.
     MinLockPeriodOutOfRange = 6,
+    /// `create_pool`'s `global_multiplier` was < 1 (mirrors `FarmingPool::initialize`'s own check).
+    InvalidGlobalMultiplier = 7,
     /// `create_pool` cannot allocate another monotonically increasing pool ID.
     PoolCountOverflow = 8,
-    /// A function requiring initialization was called on an uninitialized factory.
-    NotInitialized = 7,
 }

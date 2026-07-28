@@ -75,14 +75,6 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
-fn require_initialized(env: &Env) -> Result<(), FactoryError> {
-    if env.storage().instance().has(&DataKey::Admin) {
-        Ok(())
-    } else {
-        Err(FactoryError::NotInitialized)
-    }
-}
-
 /// Build a 32-byte salt from a pool ID so each pool gets a unique, reproducible address.
 fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
     let mut bytes = [0u8; 32];
@@ -234,8 +226,6 @@ impl Factory {
     /// would be indistinguishable from "no pools hold this asset".
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
-    pub fn get_pools_by_asset(env: Env, asset: Address) -> Result<Vec<u32>, FactoryError> {
-        require_initialized(&env)?;
     /// # Secondary Index Consideration
     /// For very large registries, a secondary per-asset index (e.g., DataKey::AssetPools
     /// maintained incrementally in create_pool) would avoid full-registry scans entirely.
@@ -246,7 +236,8 @@ impl Factory {
         asset: Address,
         start_id: u32,
         limit: u32,
-    ) -> ListPoolsResponse {
+    ) -> Result<ListPoolsResponse, FactoryError> {
+        require_initialized(&env)?;
         bump_instance(&env);
         let count: u32 = env
             .storage()
@@ -270,13 +261,12 @@ impl Factory {
                 }
             }
         }
-        Ok(matches)
 
-        ListPoolsResponse {
+        Ok(ListPoolsResponse {
             records,
             next_start_id,
             total: count,
-        }
+        })
     }
 
     /// Refresh TTLs for a range of pool records to prevent archival.
@@ -351,7 +341,7 @@ impl Factory {
         pool_id: u32,
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), FactoryError> {
-        let admin = load_admin(&env);
+        let admin = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
 
@@ -386,7 +376,7 @@ impl Factory {
     /// hash is discoverable off-chain for rollback scenarios.
     pub fn set_pool_wasm_hash(env: Env, new_hash: BytesN<32>) -> Result<(), FactoryError> {
         require_initialized(&env)?;
-        let admin: Address = load_admin(&env);
+        let admin: Address = load_admin(&env)?;
         admin.require_auth();
         bump_instance(&env);
 
@@ -412,10 +402,6 @@ impl Factory {
     /// `credit_rate` via `daily_rate_to_credit_rate` — see that function's
     /// docs for the conversion and its failure modes.
     ///
-    /// The `pool_crtd` event now includes `asset`, `daily_rate`, and
-    /// `min_lock_period` alongside `pool_id` and `pool_address` so off-chain
-    /// indexers can reconstruct the full pool state without a follow-up RPC call.
-    ///
     /// Returns `NotInitialized` if the factory has not been initialized.
     /// The pool's admin is fixed to this factory's admin *at creation time*.
     /// A later `transfer_admin` on the factory does not retroactively change
@@ -432,14 +418,12 @@ impl Factory {
         env: Env,
         asset: Address,
         daily_rate: u128,
+        global_multiplier: u32,
         min_lock_period: u64,
+        min_stake_amount: i128,
     ) -> Result<u32, FactoryError> {
         require_initialized(&env)?;
         let admin = load_admin(&env)?;
-        global_multiplier: u32,
-        min_lock_period: u64,
-    ) -> Result<u32, FactoryError> {
-        let admin = load_admin(&env);
         admin.require_auth();
         bump_instance(&env);
 
@@ -455,7 +439,6 @@ impl Factory {
         let next_count = pool_id
             .checked_add(1)
             .ok_or(FactoryError::PoolCountOverflow)?;
-        let wasm_hash: BytesN<32> = env.storage().instance().get(&DataKey::WasmHash).unwrap();
         let wasm_hash = load_wasm_hash(&env)?;
         let salt = pool_salt(&env, pool_id);
 
@@ -479,6 +462,7 @@ impl Factory {
             global_multiplier.into_val(&env),
             credit_rate.into_val(&env),
             min_lock_period.into_val(&env),
+            min_stake_amount.into_val(&env),
         ];
         let _: () = env.invoke_contract(&pool_address, &Symbol::new(&env, "initialize"), init_args);
 

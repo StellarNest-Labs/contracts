@@ -7,19 +7,16 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum PoolError {
     AlreadyInitialized = 1,
     NotInitialized = 2,
-    /// Returned by `emergency_withdraw` when the pool is not currently paused.
-    NotPaused     = 13,
-    /// Returned by `emergency_withdraw` when the user has no stake or locked position.
-    NoActiveStake = 14,
-    BelowMinimumStake = 15
     InvalidCreditRate = 3,
-    NotPaused = 13,
-    Paused = 20,
-    NoActiveStake = 14,
-    NotWhitelisted = 15,
     /// `global_multiplier` was 0 or exceeded `MAX_GLOBAL_MULTIPLIER`. See #89.
-    InvalidGlobalMultiplier = 15,
-
+    InvalidGlobalMultiplier = 4,
+    NotWhitelisted = 5,
+    BelowMinimumStake = 6,
+    /// Returned by `emergency_withdraw` when the pool is not currently paused.
+    NotPaused = 7,
+    /// Returned by `emergency_withdraw` when the user has no stake or locked position.
+    NoActiveStake = 8,
+    Paused = 9,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
