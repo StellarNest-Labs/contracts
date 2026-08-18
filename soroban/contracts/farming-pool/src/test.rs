@@ -1049,6 +1049,47 @@ fn test_unlock_assets_final_outcome_is_invariant_to_how_the_withdrawal_is_split(
 }
 
 #[test]
+fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_state_as_single_unlock(
+) {
+    // Compare: (A) unlock everything in one call the moment the position
+    // matures, vs. (B) an early partial attempt that's correctly rejected
+    // before maturity, followed by completing the withdrawal (split across
+    // two calls) once matured. Both must reach an identical final state.
+    const MIN_LOCK_PERIOD: u32 = 10;
+
+    let a = setup_with_lock_period(1, 1, MIN_LOCK_PERIOD);
+    let a_initial_balance = a.token.balance(&a.user);
+    a.client.lock_assets(&a.user, &1_000);
+    advance_ledgers(&a.env, MIN_LOCK_PERIOD);
+    a.client.unlock_assets(&a.user, &1_000);
+
+    let b = setup_with_lock_period(1, 1, MIN_LOCK_PERIOD);
+    let b_initial_balance = b.token.balance(&b.user);
+    b.client.lock_assets(&b.user, &1_000);
+    advance_ledgers(&b.env, MIN_LOCK_PERIOD - 2); // before maturity
+    assert!(
+        b.client.try_unlock_assets(&b.user, &500).is_err(),
+        "an unlock attempted before the min lock period elapses must be rejected"
+    );
+    advance_ledgers(&b.env, 2); // now exactly at maturity
+    b.client.unlock_assets(&b.user, &400);
+    b.client.unlock_assets(&b.user, &600);
+
+    assert!(a.client.get_user_position(&a.user).is_none());
+    assert!(b.client.get_user_position(&b.user).is_none());
+    assert_eq!(a.client.calculate_credits(&a.user), 0);
+    assert_eq!(b.client.calculate_credits(&b.user), 0);
+    assert_eq!(
+        a.token.balance(&a.user) - a_initial_balance,
+        b.token.balance(&b.user) - b_initial_balance,
+    );
+    assert_eq!(
+        a.token.balance(&a.contract_id),
+        b.token.balance(&b.contract_id)
+    );
+}
+
+#[test]
 fn test_unlock_assets_rejects_zero_amount() {
     let t = setup(1, 1);
     t.client.lock_assets(&t.user, &1_000);
