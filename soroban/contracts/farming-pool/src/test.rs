@@ -1583,3 +1583,192 @@ fn test_lock_assets_reverts_entirely_if_stake_token_naively_reenters() {
     // partial position was left behind.
     assert!(client.get_user_position(&user).is_none());
 }
+
+// ── stake / unstake / unlock_assets / emergency_withdraw reentrancy
+// coverage (#128) ──────────────────────────────────────────────────────────
+//
+// `lock_assets` was the only function with MockReentrantToken/
+// MockNaiveReentrantToken coverage, despite `stake`, `unstake`,
+// `unlock_assets`, and `emergency_withdraw` sharing the identical threat
+// model documented above `lock_assets` (an admin-supplied, not necessarily
+// trusted `stake_token`) — and despite being exactly the functions #70,
+// #71, and #72 flag for transfer-before-state-update ordering, which makes
+// this coverage doubly valuable as a regression suite once those land.
+//
+// Pre-existing Position/UserStake state some of these tests need is seeded
+// directly via `set_position`/`set_user_stake` under `env.as_contract`
+// rather than by first calling `lock_assets`/`stake` normally: `stake_token`
+// is fixed at `initialize` and has no setter, so a token already configured
+// to reenter would also reenter during that setup call. For the graceful
+// mock that's merely redundant; for the naive mock it's fatal — that setup
+// call would itself trap, long before the function actually under test ever
+// runs.
+
+fn seed_position(env: &Env, contract_id: &Address, user: &Address, amount: i128) {
+    env.as_contract(contract_id, || {
+        let current = env.ledger().sequence();
+        set_position(
+            env,
+            user,
+            &Position {
+                amount,
+                lock_ledger: current,
+                unlock_ledger: current,
+                checkpoint_ledger: current,
+                total_credits: 0,
+                credit_rate: read_credit_rate(env),
+            },
+        );
+    });
+}
+
+fn seed_user_stake(env: &Env, contract_id: &Address, user: &Address, amount: i128) {
+    env.as_contract(contract_id, || {
+        let current = env.ledger().sequence();
+        set_user_stake(
+            env,
+            user,
+            &UserStake {
+                amount,
+                start_ledger: current,
+                credits_banked: 0,
+                credit_rate: read_credit_rate(env),
+            },
+        );
+    });
+}
+
+// ── stake (top-up branch) ──────────────────────────────────────────────────
+
+#[test]
+fn test_stake_topup_reentrant_transfer_is_rejected_and_final_state_is_correct() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    // Pre-existing stake to top up — the branch with more state a reentrant
+    // call could observe mid-update, per the issue's own callout.
+    seed_user_stake(&env, &farming_pool_id, &user, 500i128);
+
+    // Reenter the same state-mutating function under test, not just a
+    // read-only getter — the more realistic worst-case reentry attempt.
+    let reentrant_args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&env, user.clone().into_val(&env), 200i128.into_val(&env)];
+    token_client.configure_reentrant_call(&Symbol::new(&env, "stake"), &reentrant_args);
+
+    client.stake(&user, &200i128);
+
+    assert!(token_client.reentry_was_rejected());
+
+    let stake = client.get_stake(&user).unwrap();
+    assert_eq!(stake.amount, 700);
+}
+
+#[test]
+fn test_stake_reverts_entirely_if_stake_token_naively_reenters() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockNaiveReentrantToken, ());
+    let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_user_stake(&env, &farming_pool_id, &user, 500i128);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.stake(&user, &200i128);
+    }));
+    assert!(
+        result.is_err(),
+        "stake should trap when stake_token attempts reentrancy"
+    );
+
+    // Trap rolled back the whole call, including set_user_stake — the
+    // seeded stake is untouched, no top-up applied.
+    let stake = client.get_stake(&user).unwrap();
+    assert_eq!(stake.amount, 500);
+}
+
+// ── unstake ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_unstake_reentrant_transfer_is_rejected_and_final_state_is_correct() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_user_stake(&env, &farming_pool_id, &user, 500i128);
+
+    let reentrant_args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&env, user.clone().into_val(&env)];
+    token_client.configure_reentrant_call(&Symbol::new(&env, "unstake"), &reentrant_args);
+
+    client.unstake(&user);
+
+    assert!(token_client.reentry_was_rejected());
+    assert!(client.get_stake(&user).is_none());
+}
+
+#[test]
+fn test_unstake_reverts_entirely_if_stake_token_naively_reenters() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockNaiveReentrantToken, ());
+    let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_user_stake(&env, &farming_pool_id, &user, 500i128);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.unstake(&user);
+    }));
+    assert!(
+        result.is_err(),
+        "unstake should trap when stake_token attempts reentrancy"
+    );
+
+    // Trap rolled back the whole call — the seeded stake is still present,
+    // unstake never actually completed.
+    let stake = client.get_stake(&user).unwrap();
+    assert_eq!(stake.amount, 500);
+}
+
