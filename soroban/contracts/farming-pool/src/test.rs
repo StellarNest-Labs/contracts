@@ -1838,3 +1838,115 @@ fn test_unlock_assets_reverts_entirely_if_stake_token_naively_reenters() {
     assert_eq!(position.amount, 500);
 }
 
+// ── emergency_withdraw ───────────────────────────────────────────────────────
+//
+// Makes two separate token.transfer calls in sequence when a user has both
+// a Position and a UserStake — the two tests below target reentry during
+// the first (Position-only) and second (Position + UserStake) transfer
+// respectively, since `reentry_was_rejected()` reflects the most recent
+// `transfer` call.
+
+#[test]
+fn test_emergency_withdraw_reentrant_transfer_during_position_payout_is_rejected_and_final_state_is_correct(
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_position(&env, &farming_pool_id, &user, 500i128);
+    client.pause();
+
+    let reentrant_args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&env, user.clone().into_val(&env)];
+    token_client
+        .configure_reentrant_call(&Symbol::new(&env, "emergency_withdraw"), &reentrant_args);
+
+    let returned = client.emergency_withdraw(&user);
+
+    assert!(token_client.reentry_was_rejected());
+    assert_eq!(returned, 500);
+    assert!(client.get_user_position(&user).is_none());
+}
+
+#[test]
+fn test_emergency_withdraw_reentrant_transfer_during_stake_payout_is_rejected_and_final_state_is_correct(
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_position(&env, &farming_pool_id, &user, 500i128);
+    seed_user_stake(&env, &farming_pool_id, &user, 300i128);
+    client.pause();
+
+    let reentrant_args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&env, user.clone().into_val(&env)];
+    token_client
+        .configure_reentrant_call(&Symbol::new(&env, "emergency_withdraw"), &reentrant_args);
+
+    let returned = client.emergency_withdraw(&user);
+
+    assert!(token_client.reentry_was_rejected());
+    assert_eq!(returned, 800);
+    assert!(client.get_user_position(&user).is_none());
+    assert!(client.get_stake(&user).is_none());
+}
+
+#[test]
+fn test_emergency_withdraw_reverts_entirely_if_stake_token_naively_reenters() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockNaiveReentrantToken, ());
+    let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_position(&env, &farming_pool_id, &user, 500i128);
+    seed_user_stake(&env, &farming_pool_id, &user, 300i128);
+    client.pause();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.emergency_withdraw(&user);
+    }));
+    assert!(
+        result.is_err(),
+        "emergency_withdraw should trap when stake_token attempts reentrancy"
+    );
+
+    // Trap rolled back everything — both seeded records are untouched, and
+    // neither of emergency_withdraw's two transfers actually completed.
+    let position = client.get_user_position(&user).unwrap();
+    assert_eq!(position.amount, 500);
+    let stake = client.get_stake(&user).unwrap();
+    assert_eq!(stake.amount, 300);
+}
