@@ -967,6 +967,128 @@ fn test_unlock_assets_partial_keeps_remaining_position() {
     assert_eq!(t.token.balance(&t.contract_id), 300);
 }
 
+// ── unlock_assets split-invariance (#123) ─────────────────────────────────────
+//
+// #75 covers *when* checkpoints happen (time-invariance); this covers a
+// distinct axis: whether a withdrawal's final outcome is invariant to *how*
+// its amount is partitioned across multiple unlock_assets calls.
+// checkpoint_position runs on every call and folds already-accrued credits
+// into total_credits — a genuinely different code path per partial call —
+// so this isn't guaranteed by construction, only by checkpoint_position's
+// formula being linear in `amount`.
+
+#[test]
+fn test_unlock_assets_final_outcome_is_invariant_to_how_the_withdrawal_is_split() {
+    // Each partition sums to 1_000, varying both the *count* and *sizing* of
+    // partial calls — [1] is a single full unlock, [2] two equal halves,
+    // [3] three uneven pieces, [4] a pathological near-all-at-once split
+    // that would catch an off-by-one on the first/last piece specifically.
+    let partitions: [&[i128]; 4] = [&[1_000], &[500, 500], &[300, 200, 500], &[1, 1, 998]];
+
+    // Every call after the first happens with zero further ledger advance,
+    // so only the first checkpoint in a partition ever has elapsed > 0 —
+    // isolating split-invariance from the already-covered time axis.
+    const ELAPSED_LEDGERS: u32 = 10;
+    // amount(1_000) * credit_rate(1, from setup(1, 1)) * ELAPSED_LEDGERS.
+    const EXPECTED_TOTAL_CREDITS: i128 = 1_000 * ELAPSED_LEDGERS as i128;
+
+    for partition in partitions {
+        let t = setup(1, 1);
+        let initial_balance = t.token.balance(&t.user);
+
+        t.client.lock_assets(&t.user, &1_000);
+        advance_ledgers(&t.env, ELAPSED_LEDGERS);
+
+        let mut last_part = 0i128;
+        for &part in partition {
+            t.client.unlock_assets(&t.user, &part);
+            last_part = part;
+        }
+        // The test env only retains the most recent invocation's events, so
+        // this must be captured immediately after the last unlock — any
+        // further contract/token call below would overwrite it.
+        let final_unlock_events = t.env.events().all().filter_by_contract(&t.contract_id);
+
+        assert!(
+            t.client.get_user_position(&t.user).is_none(),
+            "position must be fully cleared regardless of partition {partition:?}",
+        );
+        assert_eq!(
+            t.client.calculate_credits(&t.user),
+            0,
+            "no position left means no further accruing credits, for partition {partition:?}",
+        );
+        assert_eq!(
+            t.token.balance(&t.user),
+            initial_balance,
+            "the full locked amount must come back regardless of partition {partition:?}",
+        );
+        assert_eq!(t.token.balance(&t.contract_id), 0);
+
+        // This is exactly the last unlock's event — and since every call
+        // after the first has zero elapsed ledgers, its total_credits is
+        // the same cumulative value the *first* checkpoint alone produced,
+        // regardless of how many pieces the withdrawal was split into.
+        assert_eq!(
+            final_unlock_events,
+            soroban_sdk::vec![
+                &t.env,
+                (
+                    t.contract_id.clone(),
+                    soroban_sdk::vec![
+                        &t.env,
+                        soroban_sdk::symbol_short!("pool").into_val(&t.env),
+                        soroban_sdk::symbol_short!("unlocked").into_val(&t.env)
+                    ],
+                    (t.user.clone(), last_part, EXPECTED_TOTAL_CREDITS).into_val(&t.env),
+                )
+            ],
+            "final cumulative total_credits must be identical across partitions {partition:?}",
+        );
+    }
+}
+
+#[test]
+fn test_unlock_assets_split_across_min_lock_period_boundary_reaches_same_final_state_as_single_unlock(
+) {
+    // Compare: (A) unlock everything in one call the moment the position
+    // matures, vs. (B) an early partial attempt that's correctly rejected
+    // before maturity, followed by completing the withdrawal (split across
+    // two calls) once matured. Both must reach an identical final state.
+    const MIN_LOCK_PERIOD: u32 = 10;
+
+    let a = setup_with_lock_period(1, 1, MIN_LOCK_PERIOD);
+    let a_initial_balance = a.token.balance(&a.user);
+    a.client.lock_assets(&a.user, &1_000);
+    advance_ledgers(&a.env, MIN_LOCK_PERIOD);
+    a.client.unlock_assets(&a.user, &1_000);
+
+    let b = setup_with_lock_period(1, 1, MIN_LOCK_PERIOD);
+    let b_initial_balance = b.token.balance(&b.user);
+    b.client.lock_assets(&b.user, &1_000);
+    advance_ledgers(&b.env, MIN_LOCK_PERIOD - 2); // before maturity
+    assert!(
+        b.client.try_unlock_assets(&b.user, &500).is_err(),
+        "an unlock attempted before the min lock period elapses must be rejected"
+    );
+    advance_ledgers(&b.env, 2); // now exactly at maturity
+    b.client.unlock_assets(&b.user, &400);
+    b.client.unlock_assets(&b.user, &600);
+
+    assert!(a.client.get_user_position(&a.user).is_none());
+    assert!(b.client.get_user_position(&b.user).is_none());
+    assert_eq!(a.client.calculate_credits(&a.user), 0);
+    assert_eq!(b.client.calculate_credits(&b.user), 0);
+    assert_eq!(
+        a.token.balance(&a.user) - a_initial_balance,
+        b.token.balance(&b.user) - b_initial_balance,
+    );
+    assert_eq!(
+        a.token.balance(&a.contract_id),
+        b.token.balance(&b.contract_id)
+    );
+}
+
 #[test]
 fn test_unlock_assets_rejects_zero_amount() {
     let t = setup(1, 1);
