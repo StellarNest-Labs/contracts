@@ -967,6 +967,16 @@ fn test_unlock_assets_partial_keeps_remaining_position() {
     assert_eq!(t.token.balance(&t.contract_id), 300);
 }
 
+// ── unlock_assets split-invariance (#123) ─────────────────────────────────────
+//
+// #75 covers *when* checkpoints happen (time-invariance); this covers a
+// distinct axis: whether a withdrawal's final outcome is invariant to *how*
+// its amount is partitioned across multiple unlock_assets calls.
+// checkpoint_position runs on every call and folds already-accrued credits
+// into total_credits — a genuinely different code path per partial call —
+// so this isn't guaranteed by construction, only by checkpoint_position's
+// formula being linear in `amount`.
+
 #[test]
 fn test_unlock_assets_rejects_zero_amount() {
     let t = setup(1, 1);
