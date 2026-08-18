@@ -1772,3 +1772,69 @@ fn test_unstake_reverts_entirely_if_stake_token_naively_reenters() {
     assert_eq!(stake.amount, 500);
 }
 
+// ── unlock_assets ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_unlock_assets_reentrant_transfer_is_rejected_and_final_state_is_correct() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_position(&env, &farming_pool_id, &user, 500i128);
+
+    let reentrant_args: soroban_sdk::Vec<Val> =
+        soroban_sdk::vec![&env, user.clone().into_val(&env), 200i128.into_val(&env)];
+    token_client.configure_reentrant_call(&Symbol::new(&env, "unlock_assets"), &reentrant_args);
+
+    client.unlock_assets(&user, &200i128);
+
+    assert!(token_client.reentry_was_rejected());
+
+    let position = client.get_user_position(&user).unwrap();
+    assert_eq!(position.amount, 300);
+}
+
+#[test]
+fn test_unlock_assets_reverts_entirely_if_stake_token_naively_reenters() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockNaiveReentrantToken, ());
+    let token_client = MockNaiveReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    seed_position(&env, &farming_pool_id, &user, 500i128);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.unlock_assets(&user, &200i128);
+    }));
+    assert!(
+        result.is_err(),
+        "unlock_assets should trap when stake_token attempts reentrancy"
+    );
+
+    // Trap rolled back the whole call — the seeded position is untouched,
+    // no partial unlock was applied.
+    let position = client.get_user_position(&user).unwrap();
+    assert_eq!(position.amount, 500);
+}
+
