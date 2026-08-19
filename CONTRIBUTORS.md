@@ -1,8 +1,0 @@
-- presidojay1
-- abayomicornelius
-- abayomiwav
-- boluwacodes
-- presidoclintonbased-alt
-- richardtoms100
-- oluwarantimini
-- Temi-suwa18
