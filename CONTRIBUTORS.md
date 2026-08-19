@@ -3,3 +3,4 @@
 - abayomiwav
 - boluwacodes
 - presidoclintonbased-alt
+- richardtoms100
