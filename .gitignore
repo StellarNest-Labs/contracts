@@ -1,6 +1,9 @@
 /target
-soroban/target
-.contract-ids.json
 **/*.rs.bk
+.soroban
+.stellar
+*.wasm
 .env
 .DS_Store
+.contract-id.*
+test_snapshots/
