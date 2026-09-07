@@ -1,3 +1,4 @@
+// Test tests.
 #![cfg(test)]
 
 use crate::types::Beneficiary;
