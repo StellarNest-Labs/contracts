@@ -20,8 +20,21 @@ impl TreasuryContract {
     // Treasury lifecycle
     // ---------------------------------------------------------------
 
-    /// Create a new family treasury denominated in `asset` (a Stellar Asset Contract address).
-    /// `approval_threshold` / `required_approvals` gate withdrawals above that amount.
+    /// Creates a new family treasury denominated in `asset`.
+    ///
+    /// # Arguments
+    /// * `owner` - Address that owns the treasury and must authorize the call.
+    /// * `name` - Human-readable name for the treasury.
+    /// * `asset` - Stellar Asset Contract address used by the treasury.
+    /// * `approval_threshold` - Withdrawal amount at or above which approvals are required.
+    /// * `required_approvals` - Number of approvals required for withdrawals at or above the threshold.
+    ///   Values below 1 are clamped to 1.
+    ///
+    /// # Returns
+    /// The newly created treasury ID.
+    ///
+    /// # Failure conditions
+    /// The call fails authorization if `owner` does not authorize the invocation.
     pub fn create_treasury(
         env: Env,
         owner: Address,
@@ -96,6 +109,26 @@ impl TreasuryContract {
     // Members & roles
     // ---------------------------------------------------------------
 
+    /// Adds a member to an existing treasury with the specified role and spending limit.
+    ///
+    /// # Arguments
+    /// * `treasury_id` - ID of the treasury to modify.
+    /// * `caller` - Address authorizing the operation; must be the treasury owner or
+    ///   a member with administrative privileges.
+    /// * `member` - Address to add to the treasury.
+    /// * `role` - Role assigned to the new member.
+    /// * `spending_limit` - Optional spending limit for the new member.
+    ///
+    /// # Returns
+    /// `Ok(())` if the member is added successfully.
+    ///
+    /// # Errors
+    /// * `Error::TreasuryNotFound` if the treasury does not exist.
+    /// * `Error::MemberNotFound` if `caller` is neither the treasury owner nor an existing member.
+    /// * `Error::NotAuthorized` if `caller` does not have administrative privileges.
+    /// * `Error::MemberAlreadyExists` if `member` is already a member of the treasury.
+    ///
+    /// The call also fails authorization if `caller` does not authorize the invocation.
     pub fn add_member(
         env: Env,
         treasury_id: u64,
@@ -183,6 +216,25 @@ impl TreasuryContract {
     // Rules engine
     // ---------------------------------------------------------------
 
+    /// Updates the approval rule for future withdrawals in a treasury.
+    ///
+    /// # Arguments
+    /// * `treasury_id` - ID of the treasury to modify.
+    /// * `caller` - Address authorizing the operation; must be the treasury owner or
+    ///   a member with administrative privileges.
+    /// * `approval_threshold` - Withdrawal amount at or above which approvals are required.
+    /// * `required_approvals` - Number of approvals required for withdrawals at or above
+    ///   the threshold. Values below 1 are clamped to 1.
+    ///
+    /// # Returns
+    /// `Ok(())` if the approval rule is updated successfully.
+    ///
+    /// # Errors
+    /// * `Error::TreasuryNotFound` if the treasury does not exist.
+    /// * `Error::MemberNotFound` if `caller` is neither the treasury owner nor an existing member.
+    /// * `Error::NotAuthorized` if `caller` does not have administrative privileges.
+    ///
+    /// The call also fails authorization if `caller` does not authorize the invocation.
     pub fn set_approval_rule(
         env: Env,
         treasury_id: u64,
