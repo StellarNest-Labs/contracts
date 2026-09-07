@@ -1,3 +1,4 @@
+// Lib contract module.
 #![no_std]
 
 mod errors;
