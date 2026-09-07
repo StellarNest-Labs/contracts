@@ -1,3 +1,4 @@
+// Types type definitions.
 use soroban_sdk::{contracttype, Address, String, Vec};
 
 #[contracttype]

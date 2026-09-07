@@ -1,3 +1,4 @@
+<!-- Readme. -->
 # <img src="assets/logo.svg" width="32" height="32" align="center" alt="" /> StellarNest — Contracts
 
 Soroban smart contracts powering **StellarNest**, a family financial
