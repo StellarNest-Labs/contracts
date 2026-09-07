@@ -1,3 +1,4 @@
+# Gitignore.
 /target
 **/*.rs.bk
 .soroban

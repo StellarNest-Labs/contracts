@@ -1,3 +1,4 @@
+// Errors contract module.
 use soroban_sdk::contracterror;
 
 #[contracterror]
